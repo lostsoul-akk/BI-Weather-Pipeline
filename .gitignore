@@ -1,2 +1,33 @@
-# Python virtual environment.
-.venv/
+# Secrets
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Data (raw + processed stay local)
+data/raw/
+data/processed/
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# ML artifacts
+ml/model.pkl
+ml/model_metrics.json
+
+# Airflow runtime
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+
+# OS
+.DS_Store
+Thumbs.db
