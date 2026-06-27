@@ -39,6 +39,14 @@ jobs:
             psycopg2-binary \
             python-dotenv
 
+      - name: Force IPv4 for Supabase pooler
+        run: |
+          IPV4=$(getent ahostsv4 aws-0-eu-west-1.pooler.supabase.com \
+                | head -1 | awk '{print $1}')
+          echo "$IPV4 aws-0-eu-west-1.pooler.supabase.com" \
+                | sudo tee -a /etc/hosts
+          echo "Resolved to $IPV4"
+
       - name: Run air quality pipeline
         env:
           OWM_API_KEY:   ${{ secrets.OWM_API_KEY }}

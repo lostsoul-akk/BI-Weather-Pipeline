@@ -65,6 +65,14 @@ jobs:
             psycopg2-binary \
             python-dotenv
 
+      - name: Force IPv4 for Supabase pooler
+        run: |
+          IPV4=$(getent ahostsv4 aws-0-eu-west-1.pooler.supabase.com \
+                | head -1 | awk '{print $1}')
+          echo "$IPV4 aws-0-eu-west-1.pooler.supabase.com" \
+                | sudo tee -a /etc/hosts
+          echo "Resolved to $IPV4"
+
       # 4. Run the weather pipeline.
       #    GitHub Secrets are injected as environment variables here.
       #    The pipeline reads them via python-dotenv / os.getenv().
