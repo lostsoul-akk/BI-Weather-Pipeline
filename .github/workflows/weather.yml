@@ -1,0 +1,84 @@
+# .github/workflows/weather.yml
+#
+# Runs the weather ETL pipeline every hour.
+#
+# HOW GITHUB ACTIONS WORKS:
+# --------------------------
+# GitHub Actions is a CI/CD platform built into GitHub. It lets you run
+# scripts automatically in response to events (a push, a pull request)
+# or on a schedule (like a cron job).
+#
+# Each "workflow" is this YAML file. It defines:
+#   - WHEN to run  (on: schedule)
+#   - WHERE to run (runs-on: ubuntu-latest — GitHub spins up a fresh VM)
+#   - WHAT to run  (steps: ...)
+#
+# The VM is thrown away after each run. That is why we use Supabase for
+# the database — data needs to live outside the VM to persist.
+#
+# SECRETS:
+# GitHub Secrets are encrypted environment variables stored in your repo
+# settings. They are injected into the workflow at runtime and never
+# appear in logs. We use them for API keys and DB credentials.
+# Set them at: GitHub repo → Settings → Secrets and variables → Actions
+
+name: Weather Pipeline
+
+on:
+  schedule:
+    # Cron syntax: minute hour day month weekday
+    # "0 * * * *" = at minute 0 of every hour, every day
+    - cron: "0 * * * *"
+
+  # Also allows you to trigger this workflow manually from the
+  # GitHub Actions tab in your repo — useful for testing
+  workflow_dispatch:
+
+jobs:
+  run-weather-pipeline:
+    # GitHub provides a free Ubuntu VM for each run
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the repository code into the VM
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up the correct Python version
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # Cache pip downloads so subsequent runs install faster
+          cache: "pip"
+
+      # 3. Install only the packages the pipeline actually needs.
+      #    We skip apache-airflow here — GitHub Actions IS the scheduler.
+      #    Installing Airflow would add ~5 min to every run for no benefit.
+      - name: Install dependencies
+        run: |
+          pip install \
+            requests \
+            pandas \
+            numpy \
+            sqlalchemy \
+            psycopg2-binary \
+            python-dotenv
+
+      # 4. Run the weather pipeline.
+      #    GitHub Secrets are injected as environment variables here.
+      #    The pipeline reads them via python-dotenv / os.getenv().
+      - name: Run weather pipeline
+        env:
+          OWM_API_KEY:   ${{ secrets.OWM_API_KEY }}
+          DB_HOST:       ${{ secrets.DB_HOST }}
+          DB_PORT:       ${{ secrets.DB_PORT }}
+          DB_NAME:       ${{ secrets.DB_NAME }}
+          DB_USER:       ${{ secrets.DB_USER }}
+          DB_PASSWORD:   ${{ secrets.DB_PASSWORD }}
+          SMTP_HOST:     ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:     ${{ secrets.SMTP_PORT }}
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL:   ${{ secrets.ALERT_EMAIL }}
+        run: python -m pipeline.run_pipeline --type weather

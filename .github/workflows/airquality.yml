@@ -1,0 +1,117 @@
+# .github/workflows/airquality.yml
+#
+# Runs the air quality ETL pipeline every 3 hours.
+# Also checks if AQI >= 4 (Poor) and sends an email alert if so.
+#
+# This is a separate workflow from weather.yml so the two pipelines
+# run on independent schedules and independent logs.
+
+name: Air Quality Pipeline
+
+on:
+  schedule:
+    # "0 */3 * * *" = at minute 0, every 3rd hour (00:00, 03:00, 06:00 ...)
+    - cron: "0 */3 * * *"
+
+  workflow_dispatch:
+
+jobs:
+  run-airquality-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            requests \
+            pandas \
+            numpy \
+            sqlalchemy \
+            psycopg2-binary \
+            python-dotenv
+
+      - name: Run air quality pipeline
+        env:
+          OWM_API_KEY:   ${{ secrets.OWM_API_KEY }}
+          DB_HOST:       ${{ secrets.DB_HOST }}
+          DB_PORT:       ${{ secrets.DB_PORT }}
+          DB_NAME:       ${{ secrets.DB_NAME }}
+          DB_USER:       ${{ secrets.DB_USER }}
+          DB_PASSWORD:   ${{ secrets.DB_PASSWORD }}
+          SMTP_HOST:     ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:     ${{ secrets.SMTP_PORT }}
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL:   ${{ secrets.ALERT_EMAIL }}
+        run: python -m pipeline.run_pipeline --type airquality
+
+      # AQI alert step — runs a small inline script that queries Supabase
+      # and sends an SMTP email if any city is at AQI >= 4 (Poor or worse).
+      # This replaces the Airflow BranchPythonOperator + SMTP task.
+      - name: Check AQI and alert if needed
+        env:
+          DB_HOST:       ${{ secrets.DB_HOST }}
+          DB_PORT:       ${{ secrets.DB_PORT }}
+          DB_NAME:       ${{ secrets.DB_NAME }}
+          DB_USER:       ${{ secrets.DB_USER }}
+          DB_PASSWORD:   ${{ secrets.DB_PASSWORD }}
+          SMTP_HOST:     ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:     ${{ secrets.SMTP_PORT }}
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL:   ${{ secrets.ALERT_EMAIL }}
+        run: |
+          python - << 'EOF'
+          import os, smtplib
+          from email.mime.text import MIMEText
+          from datetime import datetime, timezone, timedelta
+          from sqlalchemy import create_engine, text
+
+          engine = create_engine(
+              f"postgresql+psycopg2://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+              f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+          )
+
+          with engine.connect() as conn:
+              rows = conn.execute(text("""
+                  SELECT DISTINCT ON (city_id)
+                      c.city_name, a.aqi, a.aqi_category, a.recorded_at
+                  FROM air_quality_readings a
+                  JOIN cities c USING (city_id)
+                  WHERE a.recorded_at >= NOW() - INTERVAL '4 hours'
+                  ORDER BY city_id, a.recorded_at DESC
+              """)).fetchall()
+
+          breached = [r for r in rows if r.aqi is not None and r.aqi >= 4]
+          if not breached:
+              print("AQI check: all cities OK.")
+          else:
+              lines = "\n".join(
+                  f"  - {r.city_name}: AQI {r.aqi} ({r.aqi_category})"
+                  for r in breached
+              )
+              body = (
+                  f"EAWeather AQI Alert - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                  f"The following cities have reached AQI >= 4 (Poor or worse):\n\n"
+                  f"{lines}\n\n"
+                  f"OWM scale: 1=Good  2=Fair  3=Moderate  4=Poor  5=Very Poor"
+              )
+              msg = MIMEText(body)
+              msg["Subject"] = f"AQI Alert - {[r.city_name for r in breached]}"
+              msg["From"]    = os.getenv("SMTP_USER")
+              msg["To"]      = os.getenv("ALERT_EMAIL")
+              with smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT"))) as s:
+                  s.starttls()
+                  s.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASSWORD"))
+                  s.send_message(msg)
+              print(f"Alert sent for: {[r.city_name for r in breached]}")
+          EOF
