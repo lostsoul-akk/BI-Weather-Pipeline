@@ -1,0 +1,157 @@
+# =============================================================================
+# docker-compose.yml - EAWeather BI Pipeline
+# =============================================================================
+#
+# WHAT IS DOCKER COMPOSE?
+# -----------------------
+# A single application often needs multiple processes running together.
+# Ours needs two: the Python ETL pipeline AND a PostgreSQL database.
+#
+# Without Compose, you'd have to start each container manually in the right
+# order, wire up networking between them, and manage environment variables
+# separately for each one. That gets messy fast.
+#
+# docker-compose.yml defines all your services, their settings, and how they
+# connect to each other - in one file. Then a single command starts everything:
+#
+#   docker compose up --build       # build images + start all services
+#   docker compose down             # stop and remove containers
+#   docker compose logs -f pipeline # stream live logs from the pipeline service
+#   docker compose exec db psql -U eaweather_user eaweather  # open psql shell
+#
+# MENTAL MODEL:
+#   Dockerfile     = recipe for ONE container image
+#   docker-compose = recipe for a SYSTEM of containers working together
+# =============================================================================
+
+# The compose file format version. Version 3.8 is widely supported.
+version: "3.8"
+
+
+# =============================================================================
+# SERVICES
+# A "service" is a container that Compose will manage. We have two: db + pipeline.
+# =============================================================================
+services:
+
+  # ---------------------------------------------------------------------------
+  # SERVICE 1: db (PostgreSQL)
+  # ---------------------------------------------------------------------------
+  #
+  # This runs a PostgreSQL 15 database inside a container. We don't write
+  # our own Dockerfile for it - we use the official postgres image from
+  # Docker Hub (the public registry where pre-built images are stored).
+  #
+  db:
+    # "image" pulls a pre-built image from Docker Hub instead of building
+    # from a Dockerfile. postgres:15 is the official PostgreSQL image.
+    image: postgres:15
+
+    # Container name makes it easy to reference in logs and docker commands.
+    container_name: eaweather_db
+
+    # Environment variables configure PostgreSQL on first startup.
+    # The postgres image reads these to create the initial database + user.
+    environment:
+      POSTGRES_DB:       eaweather            # database name to create
+      POSTGRES_USER:     eaweather_user        # database user to create
+      POSTGRES_PASSWORD: ${DB_PASSWORD}        # pulled from your .env file
+
+    # PORTS: <host-port>:<container-port>
+    # This maps port 5432 inside the container to port 5432 on your machine.
+    # Result: you can connect from your host with:
+    #   psql -h localhost -p 5432 -U eaweather_user eaweather
+    # Remove this if you only want the DB accessible inside Docker, not from host.
+    ports:
+      - "5432:5432"
+
+    # VOLUMES: named volumes give containers persistent storage.
+    # Without a volume, all data in PostgreSQL is LOST when the container stops.
+    # With a named volume (postgres_data), data survives container restarts.
+    #
+    # Format: <volume-name>:<path-inside-container>
+    # The postgres image stores its data at /var/lib/postgresql/data by default.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+      # We also mount our schema.sql file into the container's init directory.
+      # The postgres image automatically runs any .sql files it finds in
+      # /docker-entrypoint-initdb.d/ when the database is first created.
+      # This means our schema is applied automatically on first startup - 
+      # no need to run schema.sql manually.
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      #                                                          ^^
+      #   :ro means "read-only" - the container can read the file but not modify it.
+
+    # HEALTHCHECK tells Compose how to know if the service is actually ready.
+    # Without this, the pipeline might try to connect to PostgreSQL before
+    # it has finished starting up, causing connection errors.
+    #
+    # pg_isready is a PostgreSQL utility that checks if the server accepts connections.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eaweather_user -d eaweather"]
+      interval: 5s     # check every 5 seconds
+      timeout: 5s      # give up on each check after 5 seconds
+      retries: 10      # try up to 10 times before marking as unhealthy
+
+
+  # ---------------------------------------------------------------------------
+  # SERVICE 2: pipeline (our ETL application)
+  # ---------------------------------------------------------------------------
+  #
+  # This builds and runs our Python pipeline using the Dockerfile in the
+  # project root.
+  #
+  pipeline:
+    # "build: ." tells Compose to build the image from the Dockerfile
+    # in the current directory (the project root).
+    build: .
+
+    container_name: eaweather_pipeline
+
+    # depends_on + condition: service_healthy means Compose will:
+    #   1. Start the db service first
+    #   2. Wait until db passes its healthcheck
+    #   3. Only THEN start the pipeline
+    # This prevents the "database not ready" race condition.
+    depends_on:
+      db:
+        condition: service_healthy
+
+    # env_file loads all variables from .env and injects them into the container.
+    # This is how the pipeline gets DB_USER, DB_PASSWORD, OWM_API_KEY, etc.
+    # The actual .env file is never baked into the image - it's injected at runtime.
+    env_file:
+      - .env
+
+    # Override the DB_HOST from .env.
+    # Inside Docker's network, containers talk to each other by service name,
+    # not by "localhost". The db container is reachable at hostname "db".
+    # Without this override, the pipeline would try "localhost" and fail because
+    # localhost inside the pipeline container refers to itself, not the db container.
+    environment:
+      DB_HOST: db          # service name of the PostgreSQL container
+      DB_PORT: 5432
+      DB_NAME: eaweather
+      DB_USER: eaweather_user
+
+    # Mount local data/ directories as volumes so raw + processed files
+    # are written to your host machine, not lost inside the container.
+    # Format: <host-path>:<container-path>
+    volumes:
+      - ./data/raw:/app/data/raw
+      - ./data/processed:/app/data/processed
+
+    # By default, CMD runs the full pipeline once and exits.
+    # Uncomment the line below to override and run just one type:
+    # command: ["python", "-m", "pipeline.run_pipeline", "--type", "weather"]
+
+
+# =============================================================================
+# VOLUMES (named volumes declaration)
+# Named volumes are managed by Docker itself and persist across container
+# restarts. They're stored in Docker's internal storage (not a visible folder).
+# You can inspect them with: docker volume ls
+# =============================================================================
+volumes:
+  postgres_data:

@@ -1,0 +1,40 @@
+# .dockerignore
+# Works exactly like .gitignore but for Docker.
+# Files listed here are excluded when Docker copies your project into the image.
+# This keeps the image small and prevents secrets from being baked in.
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Secrets - NEVER copy these into an image
+.env
+
+# Data files - injected via volumes at runtime instead
+data/raw/
+data/processed/
+
+# Jupyter runtime
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# ML artifacts - generated inside the container
+ml/model.pkl
+ml/model_metrics.json
+
+# Airflow runtime
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+
+# Docs and dev tools
+*.md
+generate_notebooks.py
+pipeline.log
+
+# OS
+.DS_Store
+Thumbs.db
