@@ -1,6 +1,6 @@
 -- db/schema.sql
--- Run once to initialize the eaweather database.
--- Usage: psql -U <user> -d eaweather -f db/schema.sql
+-- Run once to initialize the weather database.
+-- Usage: psql -U <user> -d weather -f db/schema.sql
 
 -- ── Cities registry ────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cities (
