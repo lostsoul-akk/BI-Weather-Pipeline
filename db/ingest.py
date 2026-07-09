@@ -36,7 +36,11 @@ def get_engine():
         port=int(os.getenv("DB_PORT", 5432)),
         database=os.getenv("DB_NAME", "eaweather"),
     )
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(
+        url, 
+        pool_pre_ping=True,
+        connect_args={"sslmode": os.getenv("DB_SSLMODE", "require")},
+    )
 
 
 def get_session(engine=None) -> Session:
